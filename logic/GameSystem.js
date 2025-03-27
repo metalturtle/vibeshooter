@@ -10,6 +10,7 @@ import {
 } from "./Components.js";
 import * as THREE from "three";
 import { RaycastSystem } from "./Systems";
+import { NetworkManager } from "../networking/NetworkManager";
 
 export class GameSystem {
   constructor(renderer, assetLoader) {
@@ -18,7 +19,14 @@ export class GameSystem {
     this.entities = [];
     this.player = null;
     this.raycastSystem = new RaycastSystem();
-    
+
+    // Initialize network manager
+    this.networkManager = new NetworkManager(this.renderer.scene);
+    this.networkManager.onRemotePlayerShot = (origin, direction) => {
+      this.raycastSystem.addRay(origin, direction, null);
+    };
+    this.networkManager.connect();
+
     // Recoil animation state
     this.recoilState = {
       active: false,
@@ -28,7 +36,7 @@ export class GameSystem {
     };
 
     // Bind shoot handler to mouse click
-    document.addEventListener('click', () => this.handleShoot());
+    document.addEventListener("click", () => this.handleShoot());
   }
 
   async setupPlayer() {
@@ -105,13 +113,16 @@ export class GameSystem {
     // Get current position for ray start
     const pos = this.player.components.get("PositionComponent");
     const rayStart = new THREE.Vector3(pos.x, pos.y + 1.7, pos.z);
-    
+
     // Get direction from camera rotation
     const direction = new THREE.Vector3(0, 0, -1);
     direction.applyEuler(this.renderer.camera.rotation);
-    
+
     // Add ray to raycast system
     this.raycastSystem.addRay(rayStart, direction, this.player);
+
+    // Send shot to network
+    this.networkManager.sendShot(rayStart, direction);
 
     // Start recoil animation
     this.recoilState.active = true;
@@ -132,7 +143,7 @@ export class GameSystem {
 
     // Calculate movement direction based on player rotation
     if (inputState.rotation) {
-      const speed = 8;
+      const speed = 2;
       const rotation = inputState.rotation.clone();
       // We only want yaw rotation (y-axis) for movement
       rotation.x = 0;
@@ -163,6 +174,11 @@ export class GameSystem {
       }
     }
 
+    // Send position update to network
+    if (inputState.rotation) {
+      this.networkManager.sendPlayerState(pos, inputState.rotation);
+    }
+
     // Update rifle position and rotation
     if (this.player.rifle) {
       // Position rifle relative to camera
@@ -180,15 +196,20 @@ export class GameSystem {
       if (this.recoilState.active) {
         const currentTime = performance.now();
         const elapsed = currentTime - this.recoilState.startTime;
-        
+
         if (elapsed < this.recoilState.duration) {
           // Recoil back phase
           const progress = elapsed / this.recoilState.duration;
           rifleOffset.z += Math.sin(progress * Math.PI) * 2; // Move back by 2 units
           rifleOffset.y += Math.sin(progress * Math.PI) * 1; // Move up by 1 unit
-        } else if (elapsed < this.recoilState.duration + this.recoilState.returnDuration) {
+        } else if (
+          elapsed <
+          this.recoilState.duration + this.recoilState.returnDuration
+        ) {
           // Return phase
-          const returnProgress = (elapsed - this.recoilState.duration) / this.recoilState.returnDuration;
+          const returnProgress =
+            (elapsed - this.recoilState.duration) /
+            this.recoilState.returnDuration;
           const smoothReturn = 1 - Math.pow(1 - returnProgress, 2); // Smooth easing
           rifleOffset.z += Math.sin((1 - smoothReturn) * Math.PI) * 2;
           rifleOffset.y += Math.sin((1 - smoothReturn) * Math.PI) * 1;
@@ -228,9 +249,12 @@ export class GameSystem {
     this.raycastSystem.update(this.entities);
 
     // Draw ray effects for debug visualization
-    this.raycastSystem.getProcessedRays().forEach(ray => {
+    this.raycastSystem.getProcessedRays().forEach((ray) => {
       this.renderer.createRayEffect(ray.start, ray.point);
     });
+
+    // Update network manager with current timestamp
+    this.networkManager.update(Date.now());
   }
 
   updateEnemy(enemy, delta) {
