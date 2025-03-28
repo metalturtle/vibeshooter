@@ -23,7 +23,7 @@ export class AssetLoader {
         model = await this.loadRifle();
         break;
       case "player":
-        model = this.loadCube(10, 0xff0000);
+        model = this.loadCube(12, 0xff0000);
         break;
       case "enemy":
         model = this.loadCube(2, 0x00ff00);
